@@ -41,14 +41,11 @@ class EDOSolver:
             print(f"Error fatal al parsear la ecuación: {e}")
             raise
 
-
-
     def resolver_homogenea(self):
         #Buscar raices funcion
         self.raices = roots(self.fHomogenea, self.y)
         
         #CFS
-
         self.CFS = self._revisarMultiplicidad(self.raices)
 
         self.C = sp.symbols(f'c1:{self.grado+1}')
@@ -81,119 +78,94 @@ class EDOSolver:
         self.y_general = solucionGeneral
         self.y_final_sustituida = self.y_general
 
-    def gestionar_condiciones_iniciales(self):
+    def gestionar_condiciones_iniciales(self, lista_condiciones_str):
         if self.y_general == 0:
-            print("Error: Debe llamar a .crear_solucion_general() antes.")
-            return
+            return "Error: Debe llamar a .crear_solucion_general() antes."
 
-        print(f"\n--- 4. Condiciones Iniciales ---")
+        patron = re.compile(r"^\s*y('*)\s*\(\s*([-\d\.]+)\s*\)\s*=\s*([-\d\.]+)\s*$")
+
+        datos_procesados = []
         
-        lista_condiciones = []
-        while True:
-            decision = input("¿Desea ingresar condiciones iniciales? (s/n): ").strip().lower()
-            if decision in ['s', 'n']:
-                break
-            print("Respuesta no válida. Por favor, ingrese 's' o 'n'.")
+        for cadena in lista_condiciones_str:
+            match = patron.match(cadena)
+            if match:
+                try:
+                    comillas = match.group(1)
+                    orden_k = len(comillas)
+                    
+                    valor_x = float(match.group(2))
+                    valor_y = float(match.group(3))
+                    
+                    datos_procesados.append((orden_k, valor_x, valor_y))
+                except ValueError:
+                    return f"Error al leer números en: {cadena}"
+            else:
+                return f"Formato inválido en: '{cadena}'. Use formato y''(0)=1"
 
-        if decision == 'n':
-            print("No se ingresaron condiciones. La Solución General es la final.")
-            self.y_final_sustituida = self.y_general
-            return
-
-        print(f"Debe ingresar {self.grado} condiciones.")
-        print("Use el formato: y(x0)=y0, y'(x0)=y0, y''(x0)=y0, etc.")
-        patron_condicion = re.compile(r"^\s*y('*?)\s*\(\s*(-?[\d\.]+)\s*\)\s*=\s*(-?[\d\.]+)\s*$")
-
-        for i in range(self.grado):
-            while True:
-                entrada = input(f"  Ingrese la condición {i+1} de {self.grado}: ").strip()
-                match = patron_condicion.match(entrada)
-                if match:
-                    try:
-                        orden_k = len(match.group(1))
-                        valor_x = float(match.group(2))
-                        valor_y = float(match.group(3))
-                        lista_condiciones.append((orden_k, valor_x, valor_y))
-                        print(f"    -> Detectado: orden={orden_k}, x0={valor_x}, y0={valor_y}")
-                        break
-                    except ValueError:
-                        print("  Error al convertir los números. Intente de nuevo.")
-                else:
-                    print("  Formato no válido. Intente de nuevo.")
-        
-        if len(lista_condiciones) != self.grado:
-            print(f"Error: Se esperaban {self.grado} condiciones, pero se ingresaron {len(lista_condiciones)}.")
-            print("No se calcularán las constantes.")
-            return
+        if len(datos_procesados) != self.grado:
+            return f"Error: Se requieren {self.grado} condiciones, se recibieron {len(datos_procesados)}."
 
         ecuaciones = []
-        print("\nConstruyendo sistema de ecuaciones para las constantes:")
+        log_texto = "Sistema generado:\n"
         
-        for k, x0, y0 in lista_condiciones:
-            print(f"  Procesando condición: y{''*k}({x0}) = {y0}")
-            if k == 0:
-                derivada_k = self.y_general
-            else:
-                derivada_k = sp.diff(self.y_general, self.x, k)
-            
-            eq_sustituida = derivada_k.subs(self.x, x0)
-            eq_sustituida = eq_sustituida.doit()
-            ecuacion_final = sp.Eq(eq_sustituida, y0)
-            ecuaciones.append(ecuacion_final)
-            print("    Ecuación resultante:")
-            sp.pprint(ecuacion_final)
-
-        print("\nResolviendo el sistema...")
-
-        # ----------- CORRECCIÓN APLICADA AQUÍ -----------
         try:
-            soluciones_C = sp.solve(ecuaciones, self.C, dict=True)  # Forzar diccionario
+            for k, x0, y0 in datos_procesados:
+                if k == 0:
+                    derivada_k = self.y_general
+                else:
+                    derivada_k = sp.diff(self.y_general, self.x, k)
+                
+                eq_sustituida = derivada_k.subs(self.x, x0).doit()
+                ecuacion_final = sp.Eq(eq_sustituida, y0)
+                ecuaciones.append(ecuacion_final)
+                log_texto += f"  y{''.join(['\'' for _ in range(k)])}({x0}) = {y0}\n"
+
+            soluciones_C = sp.solve(ecuaciones, self.C, dict=True)
+            
             if soluciones_C:
-                # Tomar la primera solución encontrada
                 valores_C = soluciones_C[0]
                 self.y_final_sustituida = self.y_general.subs(valores_C).doit()
-                print("\nConstantes encontradas:")
-                sp.pprint(valores_C)
-                print("\n--- Solución Final (con condiciones aplicadas) ---")
-                sp.pprint(self.y_final_sustituida)
+                log_texto += "\nConstantes:\n" + sp.pretty(valores_C)
+                return log_texto
             else:
-                print("\nNo se pudo encontrar una solución única para las constantes.")
+                return "No se encontró solución única para las constantes."
+                
         except Exception as e:
-            print(f"\nError resolviendo el sistema de ecuaciones: {e}")
-        # -----------------------------------------------
+            return f"Error matemático al resolver condiciones: {e}"
 
-    def graficar_solucion_final(self, x_min=-10, x_max=10, filename="solucion_edo.png"):
+    def generar_grafica_tk(self, x_min=-10, x_max=10):
         if self.y_final_sustituida == 0:
-            print("Error: No hay solución final para graficar. Ejecute .crear_solucion_general() primero.")
-            return None
+            return None, "Error: No hay solución final para graficar."
         
         if any(c in self.y_final_sustituida.free_symbols for c in self.C):
-            print("\nAdvertencia: La solución general aún contiene constantes (C1, C2...).")
-            print("No se puede graficar. Debe ingresar condiciones iniciales primero.")
-            return None
+            return None, "La solución aún contiene constantes C sin resolver."
 
         print(f"\nGenerando gráfico de la solución final de x={x_min} a x={x_max}...")
         
         try:
             f_numerica = sp.lambdify(self.x, self.y_final_sustituida, 'numpy')
             x_vals = np.linspace(float(x_min), float(x_max), 400)
-            y_vals = f_numerica(x_vals)
             
-            plt.plot(x_vals, y_vals, label=f'y(x)')
+            try:
+                y_vals = f_numerica(x_vals)
+                if np.isscalar(y_vals) or (isinstance(y_vals, np.ndarray) and y_vals.shape != x_vals.shape):
+                     y_vals = np.full_like(x_vals, float(self.y_final_sustituida))
+            except:
+                 y_vals = np.full_like(x_vals, float(self.y_final_sustituida))
+            
+            fig = plt.figure(figsize=(6, 4), dpi=100)
+            plt.plot(x_vals, y_vals, label='y(x)')
             plt.xlabel("x")
             plt.ylabel("y(x)")
             plt.title("Solución Final de la Ecuación Diferencial")
             plt.grid(True)
             plt.legend()
-            plt.savefig(filename)
             
-            print(f"Gráfico guardado exitosamente como '{filename}'")
-            return filename
+            return fig, "Gráfico generado con éxito"
             
         except Exception as e:
             print(f"\nError al generar el gráfico: {e}")
-            print("La expresión puede ser demasiado compleja o no numérica.")
-            return None
+            return None, str(e)
 
     def get_solucion_general(self):
         return self.y_general
@@ -231,8 +203,8 @@ class EDOSolver:
         try:
             transformations = (standard_transformations + (implicit_multiplication_application, convert_xor))
             fCaracteristica = parse_expr(ecCaracteristica_str, 
-                                         local_dict={'y': self.y}, 
-                                         transformations=transformations)
+                                           local_dict={'y': self.y}, 
+                                           transformations=transformations)
             return fCaracteristica
         except Exception as e:
             print(f"Error al analizar la ecuación característica: {e}")
@@ -249,8 +221,8 @@ class EDOSolver:
             }
 
             funcion_simbolica = parse_expr(expresion, 
-                                           local_dict=f_locals, 
-                                           transformations=transformations)
+                                             local_dict=f_locals, 
+                                             transformations=transformations)
             return funcion_simbolica
         except Exception as e:
             print(f"Error al analizar la función complementaria: {e}")
