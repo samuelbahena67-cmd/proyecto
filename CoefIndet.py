@@ -1,4 +1,8 @@
-# CoefIndet.py (corregido y mejorado)
+# ============================================================
+#  SOLVER DE ECUACIONES DIFERENCIALES (Coeficientes Indeterminados)
+#  Versión 1: Mejorada
+# ============================================================
+
 from sympy import (
     symbols, Function, Eq, dsolve, sin, cos, tan, exp, log,
     simplify, nsimplify, lambdify, Derivative, sympify
@@ -7,9 +11,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import re
 
+
 class CoefIndet:
     def __init__(self, ecuacion):
+        # Normalizar ^ -> **
         self.ecuacion_raw = ecuacion.replace('^', '**').strip()
+        # Insertar multiplicaciones faltantes (2x -> 2*x)
         self.ecuacion_raw = self._insert_missing_multiplication(self.ecuacion_raw)
 
         self.x = symbols('x')
@@ -18,46 +25,44 @@ class CoefIndet:
         self.CI = {}
         self.C_symbols = []
         self.orden = 0
+
         self._parse_ecuacion()
 
-    # -------------------------------------------------------
-    # Inserta multiplicaciones faltantes: sin(3x) → sin(3*x)
-    # -------------------------------------------------------
+    # ---------------------------------------------------------
     def _insert_missing_multiplication(self, s):
-        s = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', s)
-        s = re.sub(r'([a-zA-Z])(\d)', r'\1*\2', s)
+        s = re.sub(r'(\d)\s*([a-zA-Z(])', r'\1*\2', s)
+        s = re.sub(r'([a-zA-Z)])\s*(\d)', r'\1*\2', s)
         return s
 
-    # -------------------------------------------------------
-    # Reemplazos estrictos: y'', y', y
-    # -------------------------------------------------------
-    def _replace_derivs_strict(self, s):
-        s = s.replace("y''", "Derivative(y_func, x, 2)")
-        s = s.replace("y'", "Derivative(y_func, x)")
-        s = re.sub(r"(?<![A-Za-z0-9_])y(?![A-Za-z0-9_])", "y_func", s)
+    # ---------------------------------------------------------
+    def _replace_derivs(self, s):
+        pattern_n = r"y\(\s*(\d+)\s*\)"
+        s = re.sub(pattern_n, lambda m: f"Derivative(y_func, x, {m.group(1)})", s)
+
+        pattern_ticks = r"y('{1,})"
+        def repl_ticks(m):
+            n = len(m.group(1))
+            return f"Derivative(y_func, x, {n})"
+        s = re.sub(pattern_ticks, repl_ticks, s)
+
+        s = re.sub(r"(?<![A-Za-z0-9_])y(?![A-Za-z0-9_\(])", "y_func", s)
         return s
 
-    # -------------------------------------------------------
-    # Parser completo
-    # -------------------------------------------------------
+    # ---------------------------------------------------------
     def _parse_ecuacion(self):
         if '=' not in self.ecuacion_raw:
-            raise ValueError("La ecuación debe tener '=' y usar notación: y, y', y''")
+            raise ValueError("La ecuación debe contener '='.")
 
         lhs, rhs = self.ecuacion_raw.split('=', 1)
-        lhs_t = self._replace_derivs_strict(lhs.strip())
-        rhs_t = self._replace_derivs_strict(rhs.strip())
+        lhs_t = self._replace_derivs(lhs.strip())
+        rhs_t = self._replace_derivs(rhs.strip())
 
         contexto = {
             "Derivative": Derivative,
             "y_func": self.y_func,
             "x": self.x,
-            "sin": sin,
-            "cos": cos,
-            "tan": tan,
-            "exp": exp,
-            "ln": log,
-            "log": log
+            "sin": sin, "cos": cos, "tan": tan,
+            "exp": exp, "ln": log, "log": log
         }
 
         try:
@@ -66,14 +71,16 @@ class CoefIndet:
         except Exception as e:
             raise ValueError(f"Error al parsear la ecuación: {e}")
 
-        # Calcular orden
         self.orden = 0
         for d in self.lhs.atoms(Derivative):
-            self.orden = max(self.orden, len(d.variables))
+            try:
+                order = len(d.variables)
+            except Exception:
+                order = 1
+            if order > self.orden:
+                self.orden = order
 
-    # -------------------------------------------------------
-    # Condiciones iniciales
-    # -------------------------------------------------------
+    # ---------------------------------------------------------
     def agregar_CI(self, ci_list):
         for ci in ci_list:
             if '=' not in ci:
@@ -83,74 +90,85 @@ class CoefIndet:
             left = left.strip()
             val = sympify(right.strip(), locals={"x": self.x})
 
-            m0 = re.match(r"^\s*y\(\s*([^\)]+)\s*\)\s*$", left)
-            m1 = re.match(r"^\s*y'\(\s*([^\)]+)\s*\)\s*$", left)
-            m2 = re.match(r"^\s*y''\(\s*([^\)]+)\s*\)\s*$", left)
+            m_general = re.match(r"^\s*y\(\s*(\d+)\s*\)\s*\(\s*([^\)]+)\s*\)\s*$", left)
+            if m_general:
+                n = int(m_general.group(1))
+                x0 = sympify(m_general.group(2))
+                self.CI[Derivative(self.y_func, self.x, n).subs({self.x: x0})] = val
+                continue
 
+            m0 = re.match(r"^\s*y\(\s*([^\)]+)\s*\)\s*$", left)
             if m0:
                 x0 = sympify(m0.group(1))
                 self.CI[self.y_func.subs({self.x: x0})] = val
-            elif m1:
+                continue
+
+            m1 = re.match(r"^\s*y'\(\s*([^\)]+)\s*\)\s*$", left)
+            if m1:
                 x0 = sympify(m1.group(1))
                 self.CI[Derivative(self.y_func, self.x).subs({self.x: x0})] = val
-            elif m2:
+                continue
+
+            m2 = re.match(r"^\s*y''\(\s*([^\)]+)\s*\)\s*$", left)
+            if m2:
                 x0 = sympify(m2.group(1))
                 self.CI[Derivative(self.y_func, self.x, 2).subs({self.x: x0})] = val
-            else:
-                raise ValueError(f"Formato de CI no soportado: {ci}")
+                continue
 
-    # -------------------------------------------------------
-    # Resolver
-    # -------------------------------------------------------
+            m_short = re.match(r"^\s*y\(\s*(\d+)\s*\)\s*$", left)
+            if m_short:
+                n = int(m_short.group(1))
+                self.CI[Derivative(self.y_func, self.x, n).subs({self.x: 0})] = val
+                continue
+
+            raise ValueError(f"Formato de CI no soportado: {ci}")
+
     def resolver(self):
         eq = Eq(self.lhs - self.rhs, 0)
+        
         if self.CI:
-            self.sol = dsolve(eq, self.y_func, ics=self.CI)
-        else:
-            self.sol = dsolve(eq, self.y_func)
+            print(f"Resolviendo con condiciones: {self.CI}") 
+            try:
+                self.sol = dsolve(eq, ics=self.CI)
+            except Exception as e:
+                print(f"Error aplicando CI en dsolve: {e}")
 
-    # -------------------------------------------------------
-    # Mostrar solución
-    # -------------------------------------------------------
+                self.sol = dsolve(eq)
+        else:
+            self.sol = dsolve(eq)
+
     def mostrar_sol(self):
         if self.sol is None:
-            return "Aún no se resuelve."
+            return "Primero debes resolver la ecuación."
 
         expr = simplify(self.sol.rhs)
-        self.C_symbols = sorted(
-            [s for s in expr.free_symbols if str(s).startswith("C")],
-            key=lambda z: str(z)
-        )
-
+        self.C_symbols = sorted([s for s in expr.free_symbols if str(s).startswith("C")], key=lambda z: str(z))
         try:
             expr = nsimplify(expr)
-        except:
+        except Exception:
             pass
-
         return str(expr)
 
-    # -------------------------------------------------------
-    # Gráfica
-    # -------------------------------------------------------
+    # ---------------------------------------------------------
     def graficar(self):
         if self.sol is None:
             print("No hay solución para graficar.")
             return
 
         expr = simplify(self.sol.rhs)
-        subs = {C: 1 for C in self.C_symbols}
-        expr_num = expr.subs(subs)
+        for C in [s for s in expr.free_symbols if 'C' in str(s)]:
+            expr = expr.subs(C, 1)
 
+        f = lambdify(self.x, expr, "numpy")
+        x_vals = np.linspace(-10, 10, 400)
         try:
-            f = lambdify(self.x, expr_num, "numpy")
-            x_vals = np.linspace(-10, 10, 400)
             y_vals = f(x_vals)
-        except:
-            x_vals = np.linspace(-10, 10, 400)
-            y_vals = [float(expr_num.subs({self.x: x})) for x in x_vals]
+        except Exception:
+            y_vals = [float(expr.subs({self.x: x})) for x in x_vals]
 
-        plt.figure(figsize=(8, 4))
-        plt.plot(x_vals, y_vals, label="y(x)")
-        plt.grid(True)
-        plt.legend()
+        plt.plot(x_vals, y_vals)
+        plt.grid()
+        plt.title("Solución aproximada (C=1)")
+        plt.xlabel("x")
+        plt.ylabel("y(x)")
         plt.show()
